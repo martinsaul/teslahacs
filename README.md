@@ -1,4 +1,4 @@
-# Tesla Custom Integration
+# Tesla Custom Integration (teslaHitch Edition)
 
 [![GitHub Release][releases-shield]][releases]
 ![GitHub all releases][download-all]
@@ -9,62 +9,62 @@
 
 [![hacs][hacsbadge]][hacs]
 ![Project Maintenance][maintenance-shield]
-[![BuyMeCoffee][buymecoffeebadge]][buymecoffee]
 
-[![Discord][discord-shield]][discord]
-[![Community Forum][forum-shield]][forum]
+A fork of the [Tesla Custom Integration](https://github.com/alandtse/tesla) for Home Assistant, modified to work with [teslaHitch](https://github.com/martinsaul/teslaHitch) for automatic proxy and token configuration.
 
-A fork of the previous official Tesla integration in Home Assistant which has been removed due to Tesla login issues. Do not report issues to Home Assistant.
+## What's different
 
-To use the component, you will need an application to generate a Tesla refresh token:
+The original integration requires you to manually provide a refresh token (from a third-party app), proxy URL, SSL certificate path, and Tesla developer Client ID. This fork replaces all of that with a single **teslaHitch URL** — everything else is fetched automatically.
 
-- Android: [Tesla Tokens](https://play.google.com/store/apps/details?id=net.leveugle.teslatokens)
-- iOS: [Auth App for Tesla](https://apps.apple.com/us/app/auth-app-for-tesla/id1552058613)
-- TeslaFi: [Tesla v3 API Tokens](https://support.teslafi.com/en/communities/1/topics/16979-tesla-v3-api-tokens)
-- Chromium/Edge: [Chromium Tesla Token Generator](https://github.com/DoctorMcKay/chromium-tesla-token-generator)
+| Original | This fork |
+|----------|-----------|
+| Refresh token (from Auth App for Tesla / Tesla Tokens) | Automatic (from teslaHitch OAuth) |
+| Proxy URL (manual entry) | Automatic (from teslaHitch config) |
+| Proxy SSL certificate path | Not needed (Traefik handles TLS) |
+| Tesla developer Client ID | Automatic (from teslaHitch config) |
+
+## Prerequisites
+
+- A running [teslaHitch](https://github.com/martinsaul/teslaHitch) instance with completed OAuth flow
+- Traefik reverse proxy serving teslaHitch and the Tesla HTTP proxy with valid TLS certificates
 
 ## Installation
 
-1. Use [HACS](https://hacs.xyz/docs/setup/download), in `HACS > Integrations > Explore & Add Repositories` search for "Tesla". After adding this `https://github.com/alandtse/tesla` as a custom repository. Skip to 7.
-2. If you do not have HACS, use the tool of choice to open the directory (folder) for your HA configuration (where you find `configuration.yaml`).
-3. If you do not have a `custom_components` directory (folder) there, you need to create it.
-4. In the `custom_components` directory (folder) create a new folder called `tesla_custom`.
-5. Download _all_ the files from the `custom_components/tesla_custom/` directory (folder) in this repository.
-6. Place the files you downloaded in the new directory (folder) you created.
-7. Restart Home Assistant.
-8. Add the integration: [![Add Integration][add-integration-badge]][add-integration] or in the HA UI go to "Settings" -> "Devices & Services" then click "+" and search for "Tesla Custom Integration".
-9. For most vehicles, you will need to the Tesla Fleet API Proxy (see [below](#tesla-fleet-api-proxy)).
+1. In HACS, go to **Integrations > Explore & Add Repositories**
+2. Add `https://github.com/martinsaul/teslahacs` as a custom repository
+3. Install **Tesla Custom Integration**
+4. Restart Home Assistant
+5. Add the integration: go to **Settings > Devices & Services**, click **+**, search for **Tesla Custom Integration**
 
-Note: This integration will wake up your vehicle(s) during installation.
+## Configuration
 
-## Tesla Fleet API Proxy
+During setup, you only need to provide:
 
-Tesla has [deprecated](https://developer.tesla.com/docs/fleet-api) the Owner API for _most_ vehicles in favor of a new Fleet API with end-to-end encryption. You'll know you're affected if you see `teslajsonpy.exceptions.TeslaException` errors in the log when attempting to send commands (sensors will work regardless).
+| Field | Description | Example |
+|-------|-------------|---------|
+| **teslaHitch URL** | URL of your teslaHitch instance | `https://teslahitch.home.zenithnetwork.com` |
+| **Email** | Your Tesla account email | `you@example.com` |
+| **Include Vehicles** | Whether to include vehicles | `true` |
+| **Include Energy Sites** | Whether to include energy sites (Powerwall, etc.) | `true` |
 
-If your vehicle is affected by this (most likely), you'll need to install the [Tesla HTTP Proxy](https://github.com/llamafilm/tesla-http-proxy-addon) add-on and configure this component to use it. This requires a complex setup; see [here](https://github.com/alandtse/tesla/wiki/Proxy-setup-with-DuckDNS-and-NGinx) for step-by-step instructions.
+The integration calls `{teslaHitch URL}/api/ha/config` to fetch your refresh token, client ID, and proxy URL automatically.
 
-<!---->
+**Important:** Complete the Tesla OAuth flow on teslaHitch before setting up this integration. If OAuth hasn't been completed, you'll see an "invalid auth" error.
 
-## Usage
-
-The `Tesla` integration offers integration with the [Tesla](https://auth.tesla.com/login) cloud service and provides presence detection as well as sensors such as charger state and temperature.
+## Entities
 
 This integration provides the following entities for vehicles:
 
 - Binary sensors - charger connection, charging status, car online, parking brake, car asleep, and door status.
-- Buttons - horn, flash lights, wake up<sup>1</sup>, force data update<sup>1</sup>, trigger HomeLink, and remote start. **Note:** The HomeLink button is disabled by default as some vehicles don't have this option. Enable via configuration/entities if desired.
+- Buttons - horn, flash lights, wake up, force data update, trigger HomeLink, and remote start.
 - Climate - turn HVAC on/off, set target temperature, set preset modes (defrost, keep on, dog mode and camp mode).
-- Device tracker - car location<sup>1</sup>, and active route destination.
+- Device tracker - car location, and active route destination.
 - Cover - Charger door, frunk, trunk, and windows.
 - Locks - door lock, and charge port latch lock.
-  **Note:** Set `state` to `heat_cool` or `off` to enable/disable your Tesla's climate system via a scene.
-- Selects - seat heaters and cabin overheat protection<sup>2</sup>. **Note:** Turning on a heated seat will cause the climate to turn on.
+- Selects - seat heaters and cabin overheat protection.
 - Sensors - battery level, charge rate, energy added, charger power, inside/outside temperature, odometer, estimated range, time charge complete, TPMS pressure, active route arrival time and distance to arrival.
-- Switches - heated steering wheel, charger, sentry mode, polling, and valet mode.<sup>1</sup>.
-- Update - software update<sup>2</sup>
-
-<sup>1</sup> _Diagnostics entities._<br/>
-<sup>2</sup> _Configuration entities._
+- Switches - heated steering wheel, charger, sentry mode, polling, and valet mode.
+- Update - software update
 
 This integration provides the following entities for energy sites:
 
@@ -74,27 +74,22 @@ This integration provides the following entities for energy sites:
 
 ## Options
 
-Tesla options are set via **Configuration** -> **Integrations** -> **Tesla** -> **Options**.
+Tesla options are set via **Settings** -> **Devices & Services** -> **Tesla** -> **Options**.
 
 - Seconds between polling - referred to below as the `polling_interval`.
-- Wake cars on start - Whether to wake sleeping cars on Home Assistant startup. This allows a user to choose whether cars should continue to sleep (and not update information) or to wake up the cars potentially interrupting long term hibernation and increasing vampire drain.
-- Polling policy - When do we actively poll the car to get updates, and when do we try to allow the car to sleep. See [the Wiki](https://github.com/alandtse/tesla/wiki/Polling-policy) for more information.
-- Sync Data from TeslaMate via MQTT - Enable syncing of Data from an TeslaMate instance via MQTT, essentially enabling the Streaming API for updates. This requires MQTT to be configured in Home Assistant.
+- Wake cars on start - Whether to wake sleeping cars on Home Assistant startup.
+- Polling policy - When do we actively poll the car to get updates. See [the Wiki](https://github.com/alandtse/tesla/wiki/Polling-policy) for more information.
+- Sync Data from TeslaMate via MQTT - Enable syncing of Data from a TeslaMate instance via MQTT.
 
 ## Potential Battery impacts
 
-Here are some things to consider and understand when implementing the Tesla component and its potential effect on your car's battery.
+- The `polling_interval` determines when to check if the car is awake (default: 660 seconds). Polling too frequently can keep the car awake and drain the battery.
+- The car will be woken up when a command is actively sent (door unlock, HVAC, etc.).
+- You can toggle the `polling switch` on/off to disable polling completely.
 
-- The `polling_interval` determines when to check if the car is awake and new information is available, but the Tesla integration will not wake up a sleeping car during this polling. By default, the polling will occur every 660 seconds. Polling a car too frequently can keep the car awake and drain the battery. Different firmware versions and measurements of Tesla cars can take from 11 to 15 minutes for sleep mode to occur. There is no official information on sleep mode timings so your mileage may vary and you should experiment with different polling times for an optimal experience.
-- The car will, however, be woken up when a command is actively sent to the car, such as door unlock or turning on the HVAC. It will then also fetch updated information while the car is awake based on the `polling_interval`.
-- The car can intentionally be woken up to fetch recent information by sending a harmless command, for example, a lock command. This can be used in an automation to, for example, ensure that updated information is available every morning. (Note that the command must be valid for that specific car model. So locking the frunk of a Model 3 will not wake up that car).
-- You can also toggle the `polling switch` on/off to disable polling of the vehicle completely via automations or the Lovelace UI.
+## Credits
 
-## Contributions are welcome!
-
-If you want to contribute to this please read the [Contribution guidelines](CONTRIBUTING.md)
-
-_Component built with [integration_blueprint][integration_blueprint]._
+Based on [alandtse/tesla](https://github.com/alandtse/tesla). Modified for use with teslaHitch.
 
 ---
 
@@ -111,7 +106,7 @@ _Component built with [integration_blueprint][integration_blueprint]._
 [forum]: https://community.home-assistant.io/
 [license]: LICENSE
 [license-shield]: https://img.shields.io/github/license/alandtse/tesla.svg?style=for-the-badge
-[maintenance-shield]: https://img.shields.io/badge/maintainer-Alan%20Tse%20%40alandtse-blue.svg?style=for-the-badge
+[maintenance-shield]: https://img.shields.io/badge/maintainer-Martin%20Saul-blue.svg?style=for-the-badge
 [releases-shield]: https://img.shields.io/github/release/alandtse/tesla.svg?style=for-the-badge
 [releases]: https://github.com/alandtse/tesla/releases
 [download-all]: https://img.shields.io/github/downloads/alandtse/tesla/total?style=for-the-badge
