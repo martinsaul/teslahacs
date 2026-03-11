@@ -29,7 +29,7 @@ from teslajsonpy import Controller as TeslaAPI
 from teslajsonpy.const import AUTH_DOMAIN
 from teslajsonpy.exceptions import IncompleteCredentials, TeslaException
 
-from .config_flow import CannotConnect, InvalidAuth, validate_input
+from .config_flow import CannotConnect, InvalidAuth, validate_input, _fetch_teslahitch_config
 from .const import (
     CONF_API_PROXY_URL,
     CONF_ENABLE_TESLAMATE,
@@ -37,6 +37,7 @@ from .const import (
     CONF_INCLUDE_ENERGYSITES,
     CONF_INCLUDE_VEHICLES,
     CONF_POLLING_POLICY,
+    CONF_TESLAHITCH_URL,
     CONF_WAKE_ON_START,
     DATA_LISTENER,
     DEFAULT_ENABLE_TESLAMATE,
@@ -67,6 +68,30 @@ def _async_save_tokens(hass, config_entry, access_token, refresh_token, expirati
             CONF_EXPIRATION: expiration,
         },
     )
+
+
+async def _async_refresh_tokens_from_hitch(hass, config_entry):
+    """Re-fetch tokens from teslahitch when the current ones are rejected."""
+    teslahitch_url = config_entry.data.get(CONF_TESLAHITCH_URL)
+    if not teslahitch_url:
+        _LOGGER.warning("No teslahitch URL configured, cannot recover tokens")
+        return False
+
+    try:
+        _LOGGER.info("Refreshing tokens from teslahitch at %s", teslahitch_url)
+        hitch_config = await _fetch_teslahitch_config(hass, teslahitch_url)
+        _async_save_tokens(
+            hass,
+            config_entry,
+            access_token=hitch_config["access_token"],
+            refresh_token=hitch_config["refresh_token"],
+            expiration=hitch_config.get("expiration", 0),
+        )
+        _LOGGER.info("Tokens refreshed from teslahitch successfully")
+        return True
+    except Exception as ex:
+        _LOGGER.error("Failed to refresh tokens from teslahitch: %s", ex)
+        return False
 
 
 @callback
@@ -155,27 +180,32 @@ async def async_setup_entry(hass, config_entry):
         )
         hass.data[DOMAIN].pop(email)
 
-    try:
-        controller = TeslaAPI(
+    async def _create_and_connect(cfg):
+        """Create a TeslaAPI controller and connect."""
+        ctrl = TeslaAPI(
             async_client,
-            email=config.get(CONF_USERNAME),
-            refresh_token=config[CONF_TOKEN],
-            access_token=config[CONF_ACCESS_TOKEN],
-            expiration=config.get(CONF_EXPIRATION, 0),
-            auth_domain=config.get(CONF_DOMAIN, AUTH_DOMAIN),
+            email=cfg.get(CONF_USERNAME),
+            refresh_token=cfg[CONF_TOKEN],
+            access_token=cfg[CONF_ACCESS_TOKEN],
+            expiration=cfg.get(CONF_EXPIRATION, 0),
+            auth_domain=cfg.get(CONF_DOMAIN, AUTH_DOMAIN),
             update_interval=config_entry.options.get(
                 CONF_SCAN_INTERVAL, DEFAULT_SCAN_INTERVAL
             ),
             polling_policy=config_entry.options.get(
                 CONF_POLLING_POLICY, DEFAULT_POLLING_POLICY
             ),
-            api_proxy_url=config.get(CONF_API_PROXY_URL),
-            client_id=config.get(CONF_CLIENT_ID),
+            api_proxy_url=cfg.get(CONF_API_PROXY_URL),
+            client_id=cfg.get(CONF_CLIENT_ID),
         )
-        result = await controller.connect(
-            include_vehicles=config.get(CONF_INCLUDE_VEHICLES),
-            include_energysites=config.get(CONF_INCLUDE_ENERGYSITES),
+        res = await ctrl.connect(
+            include_vehicles=cfg.get(CONF_INCLUDE_VEHICLES),
+            include_energysites=cfg.get(CONF_INCLUDE_ENERGYSITES),
         )
+        return ctrl, res
+
+    try:
+        controller, result = await _create_and_connect(config)
         refresh_token = result["refresh_token"]
         access_token = result["access_token"]
         expiration = result["expiration"]
@@ -189,22 +219,45 @@ async def async_setup_entry(hass, config_entry):
         raise ConfigEntryNotReady from ex
 
     except TeslaException as ex:
-        await async_client.aclose()
-
         if ex.code == HTTPStatus.UNAUTHORIZED:
+            await async_client.aclose()
             raise ConfigEntryAuthFailed from ex
 
         if ex.message in [
             "TOO_MANY_REQUESTS",
             "UPSTREAM_TIMEOUT",
         ]:
+            await async_client.aclose()
             raise ConfigEntryNotReady(
                 f"Temporarily unable to communicate with Tesla API: {ex.message}"
             ) from ex
 
-        _LOGGER.error("Unable to communicate with Tesla API: %s", ex.message)
-
-        return False
+        # For 403 or other errors, try refreshing tokens from teslahitch
+        if ex.code == HTTPStatus.FORBIDDEN or "403" in str(ex.message):
+            _LOGGER.warning(
+                "Tesla API returned 403, attempting token recovery from teslahitch..."
+            )
+            if await _async_refresh_tokens_from_hitch(hass, config_entry):
+                try:
+                    config = config_entry.data
+                    controller, result = await _create_and_connect(config)
+                    refresh_token = result["refresh_token"]
+                    access_token = result["access_token"]
+                    expiration = result["expiration"]
+                except Exception:
+                    await async_client.aclose()
+                    raise ConfigEntryNotReady(
+                        "Token recovery from teslahitch succeeded but reconnection failed"
+                    ) from ex
+            else:
+                await async_client.aclose()
+                raise ConfigEntryNotReady(
+                    "Tesla API returned 403, teslahitch token refresh failed. Will retry."
+                ) from ex
+        else:
+            await async_client.aclose()
+            _LOGGER.error("Unable to communicate with Tesla API: %s", ex.message)
+            return False
 
     async def _async_close_client(*_):
         await async_client.aclose()
@@ -463,6 +516,18 @@ class TeslaDataUpdateCoordinator(DataUpdateCoordinator):
             async with self.reload_lock:
                 await self.hass.config_entries.async_reload(self.config_entry.entry_id)
         except TeslaException as err:
+            if err.code == HTTPStatus.FORBIDDEN or "403" in str(err.message):
+                _LOGGER.warning(
+                    "Tesla API returned 403 during update, recovering tokens from teslahitch..."
+                )
+                if await _async_refresh_tokens_from_hitch(self.hass, self.config_entry):
+                    if self.reload_lock.locked():
+                        return
+                    async with self.reload_lock:
+                        await self.hass.config_entries.async_reload(
+                            self.config_entry.entry_id
+                        )
+                    return
             raise UpdateFailed(f"Error communicating with API: {err}") from err
         else:
             if vin := self.vin:
