@@ -2,7 +2,6 @@
 
 from http import HTTPStatus
 import logging
-import os
 
 from homeassistant import config_entries, core, exceptions
 from homeassistant.const import (
@@ -34,6 +33,7 @@ from .const import (
     CONF_INCLUDE_ENERGYSITES,
     CONF_INCLUDE_VEHICLES,
     CONF_POLLING_POLICY,
+    CONF_TESLAHITCH_URL,
     CONF_WAKE_ON_START,
     DEFAULT_ENABLE_TESLAMATE,
     DEFAULT_POLLING_POLICY,
@@ -47,6 +47,15 @@ from .util import SSL_CONTEXT
 _LOGGER = logging.getLogger(__name__)
 
 
+async def _fetch_teslahitch_config(hass: core.HomeAssistant, teslahitch_url: str) -> dict:
+    """Fetch configuration from teslahitch /api/ha/config endpoint."""
+    url = f"{teslahitch_url.rstrip('/')}/api/ha/config"
+    async with httpx.AsyncClient(verify=SSL_CONTEXT, timeout=10) as client:
+        resp = await client.get(url)
+        resp.raise_for_status()
+        return resp.json()
+
+
 class TeslaConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
     """Handle a config flow for Tesla."""
 
@@ -56,35 +65,13 @@ class TeslaConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
         """Initialize the tesla flow."""
         self.username = None
         self.reauth = False
-        self.use_proxy = False
 
     async def async_step_import(self, import_config):
         """Import a config entry from configuration.yaml."""
         return await self.async_step_user(import_config)
 
     async def async_step_user(self, user_input=None):
-        """Handle the start of the config flow."""
-        data_schema = vol.Schema(
-            {
-                vol.Required(CONF_API_PROXY_ENABLE, default=False): bool,
-            }
-        )
-
-        if user_input is None:
-            return self.async_show_form(
-                step_id="user",
-                data_schema=data_schema,
-            )
-
-        # in case we import a config entry from configuration.yaml
-        if CONF_API_PROXY_CERT in user_input:
-            return await self.async_step_credentials(user_input)
-
-        self.use_proxy = user_input.get(CONF_API_PROXY_ENABLE, False)
-        return await self.async_step_credentials()
-
-    async def async_step_credentials(self, user_input=None):
-        """Handle the second step of the config flow."""
+        """Handle the config flow - single step via teslahitch."""
         errors = {}
 
         if user_input is not None:
@@ -94,7 +81,6 @@ class TeslaConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
 
             try:
                 info = await validate_input(self.hass, user_input)
-                # Used for only forcing cars awake on initial setup in async_setup_entry
                 info.update({"initial_setup": True})
             except CannotConnect:
                 errors["base"] = "cannot_connect"
@@ -113,9 +99,18 @@ class TeslaConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                     title=user_input[CONF_USERNAME], data=info
                 )
 
+        data_schema = vol.Schema(
+            {
+                vol.Required(CONF_TESLAHITCH_URL): str,
+                vol.Required(CONF_USERNAME, default=self.username): str,
+                vol.Required(CONF_INCLUDE_VEHICLES, default=True): bool,
+                vol.Required(CONF_INCLUDE_ENERGYSITES, default=True): bool,
+            }
+        )
+
         return self.async_show_form(
-            step_id="credentials",
-            data_schema=self._async_schema(api_proxy_enable=self.use_proxy),
+            step_id="user",
+            data_schema=data_schema,
             errors=errors,
             description_placeholders={},
         )
@@ -131,61 +126,6 @@ class TeslaConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
     def async_get_options_flow(config_entry):
         """Get the options flow for this handler."""
         return OptionsFlowHandler()
-
-    @callback
-    def _async_schema(self, api_proxy_enable: bool):
-        """Fetch schema with defaults."""
-
-        schema = vol.Schema(
-            {
-                vol.Required(CONF_USERNAME, default=self.username): str,
-                vol.Required(CONF_TOKEN): str,
-                vol.Required(CONF_DOMAIN, default=AUTH_DOMAIN): str,
-                vol.Required(CONF_INCLUDE_VEHICLES, default=True): bool,
-                vol.Required(CONF_INCLUDE_ENERGYSITES, default=True): bool,
-            }
-        )
-
-        api_proxy_cert = api_proxy_url = client_id = None
-        if api_proxy_enable:
-            # autofill fields if HTTP Proxy is running as addon
-            if "SUPERVISOR_TOKEN" in os.environ:
-                _LOGGER.debug("Running in supervised environment")
-                # find out if addon is running from normal repo or local
-                req = httpx.get(
-                    "http://supervisor/addons",
-                    headers={
-                        "Authorization": f"Bearer {os.environ['SUPERVISOR_TOKEN']}"
-                    },
-                )
-                for addon in req.json()["data"]["addons"]:
-                    if addon["name"] == "Tesla HTTP Proxy":
-                        addon_slug = addon["slug"]
-                        break
-
-                try:
-                    # read Client ID from addon
-                    req = httpx.get(
-                        f"http://supervisor/addons/{addon_slug}/info",
-                        headers={
-                            "Authorization": f"Bearer {os.environ['SUPERVISOR_TOKEN']}"
-                        },
-                    )
-                    client_id = req.json()["data"]["options"]["client_id"]
-                    api_proxy_url = "https://" + req.json()["data"]["hostname"]
-                    api_proxy_cert = "/share/tesla/selfsigned.pem"
-                    _LOGGER.debug("Found addon: %s", addon_slug)
-                except NameError:
-                    _LOGGER.warning("Unable to communicate with Tesla HTTP Proxy addon")
-
-            schema = schema.extend(
-                {
-                    vol.Required(CONF_API_PROXY_URL, default=api_proxy_url): str,
-                    vol.Required(CONF_API_PROXY_CERT, default=api_proxy_cert): str,
-                    vol.Required(CONF_CLIENT_ID, default=client_id): str,
-                }
-            )
-        return schema
 
     @callback
     def _async_entry_for_username(self, username):
@@ -244,8 +184,28 @@ class OptionsFlowHandler(config_entries.OptionsFlow):
 async def validate_input(hass: core.HomeAssistant, data) -> dict:
     """Validate the user input allows us to connect.
 
-    Data has the keys from DATA_SCHEMA with values provided by the user.
+    Fetches config from teslahitch and validates with Tesla API.
     """
+
+    teslahitch_url = data[CONF_TESLAHITCH_URL]
+
+    try:
+        hitch_config = await _fetch_teslahitch_config(hass, teslahitch_url)
+    except httpx.HTTPStatusError as ex:
+        if ex.response.status_code == 412:
+            _LOGGER.error(
+                "teslahitch OAuth not completed. Complete the OAuth flow on teslahitch first."
+            )
+            raise InvalidAuth() from ex
+        _LOGGER.error("Failed to fetch config from teslahitch: %s", ex)
+        raise CannotConnect() from ex
+    except (httpx.ConnectError, httpx.ConnectTimeout) as ex:
+        _LOGGER.error("Cannot connect to teslahitch at %s: %s", teslahitch_url, ex)
+        raise CannotConnect() from ex
+
+    refresh_token = hitch_config["refresh_token"]
+    client_id = hitch_config["client_id"]
+    proxy_url = hitch_config["proxy_url"]
 
     config = {}
     async_client = httpx.AsyncClient(
@@ -256,26 +216,25 @@ async def validate_input(hass: core.HomeAssistant, data) -> dict:
         controller = TeslaAPI(
             async_client,
             email=data[CONF_USERNAME],
-            refresh_token=data[CONF_TOKEN],
+            refresh_token=refresh_token,
             update_interval=DEFAULT_SCAN_INTERVAL,
-            expiration=data.get(CONF_EXPIRATION, 0),
-            auth_domain=data.get(CONF_DOMAIN, AUTH_DOMAIN),
+            expiration=hitch_config.get("expiration", 0),
+            auth_domain=AUTH_DOMAIN,
             polling_policy=data.get(CONF_POLLING_POLICY, DEFAULT_POLLING_POLICY),
-            api_proxy_cert=data.get(CONF_API_PROXY_CERT),
-            api_proxy_url=data.get(CONF_API_PROXY_URL),
-            client_id=data.get(CONF_CLIENT_ID),
+            api_proxy_url=proxy_url,
+            client_id=client_id,
         )
         result = await controller.connect(test_login=True)
         config[CONF_TOKEN] = result["refresh_token"]
         config[CONF_ACCESS_TOKEN] = result[CONF_ACCESS_TOKEN]
         config[CONF_EXPIRATION] = result[CONF_EXPIRATION]
         config[CONF_USERNAME] = data[CONF_USERNAME]
-        config[CONF_DOMAIN] = data.get(CONF_DOMAIN, AUTH_DOMAIN)
+        config[CONF_DOMAIN] = AUTH_DOMAIN
         config[CONF_INCLUDE_VEHICLES] = data[CONF_INCLUDE_VEHICLES]
         config[CONF_INCLUDE_ENERGYSITES] = data[CONF_INCLUDE_ENERGYSITES]
-        config[CONF_API_PROXY_URL] = data.get(CONF_API_PROXY_URL)
-        config[CONF_API_PROXY_CERT] = data.get(CONF_API_PROXY_CERT)
-        config[CONF_CLIENT_ID] = data.get(CONF_CLIENT_ID, "ownerapi")
+        config[CONF_API_PROXY_URL] = proxy_url
+        config[CONF_CLIENT_ID] = client_id
+        config[CONF_TESLAHITCH_URL] = teslahitch_url
 
     except IncompleteCredentials as ex:
         _LOGGER.error("Authentication error: %s %s", ex.message, ex)

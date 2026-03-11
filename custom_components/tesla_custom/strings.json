@@ -12,24 +12,12 @@
     "step": {
       "user": {
         "data": {
-          "api_proxy_enable": "Use Fleet API Proxy"
-        },
-        "description": "Newer vehicles may require an API Proxy.  If this applies to\r\n you, install the Tesla HTTP Proxy first.",
-        "title": "Tesla - Configuration"
-      },
-      "credentials": {
-        "data": {
-          "mfa": "MFA Code (optional)",
-          "password": "Password",
+          "teslahitch_url": "teslaHitch URL",
           "username": "Email",
-          "token": "Refresh Token",
           "include_vehicles": "Include Vehicles",
-          "include_energysites": "Include Energy Sites",
-          "api_proxy_url": "Proxy URL",
-          "api_proxy_cert": "Proxy SSL certificate",
-          "client_id": "Tesla developer Client ID"
+          "include_energysites": "Include Energy Sites"
         },
-        "description": "Use 'Auth App for Tesla' on iOS or 'Tesla Tokens' on Android\r\n to create a refresh token and enter it below.\r\n Vehicle(s) are forced awake for setup.",
+        "description": "Enter your teslaHitch URL and Tesla account email.\r\n Tokens and proxy configuration are fetched automatically.\r\n Complete the OAuth flow on teslaHitch before setting up this integration.",
         "title": "Tesla - Configuration"
       }
     }

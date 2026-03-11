@@ -5,7 +5,6 @@ from datetime import timedelta
 from functools import partial
 from http import HTTPStatus
 import logging
-import ssl
 from typing import Any
 
 import async_timeout
@@ -32,7 +31,6 @@ from teslajsonpy.exceptions import IncompleteCredentials, TeslaException
 
 from .config_flow import CannotConnect, InvalidAuth, validate_input
 from .const import (
-    CONF_API_PROXY_CERT,
     CONF_API_PROXY_URL,
     CONF_ENABLE_TESLAMATE,
     CONF_EXPIRATION,
@@ -141,19 +139,6 @@ async def async_setup_entry(hass, config_entry):
     config = config_entry.data
     # Because users can have multiple accounts, we always
     # create a new session so they have separate cookies
-
-    if api_proxy_cert := config.get(CONF_API_PROXY_CERT):
-        try:
-            await hass.async_add_executor_job(
-                SSL_CONTEXT.load_verify_locations, api_proxy_cert
-            )
-            if _LOGGER.isEnabledFor(logging.DEBUG):
-                _LOGGER.debug("Trusting CA: %s", SSL_CONTEXT.get_ca_certs()[-1])
-        except (FileNotFoundError, ssl.SSLError):
-            _LOGGER.warning(
-                "Unable to load custom SSL certificate from %s",
-                api_proxy_cert,
-            )
 
     async_client = httpx.AsyncClient(
         headers={USER_AGENT: SERVER_SOFTWARE}, timeout=60, verify=SSL_CONTEXT
