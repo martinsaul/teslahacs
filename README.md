@@ -89,7 +89,7 @@ Tesla options are set via **Settings** -> **Devices & Services** -> **Tesla** ->
 
 ## Credits
 
-Based on [alandtse/tesla](https://github.com/alandtse/tesla). Modified for use with teslaHitch.
+Originally built by [Alan Tse (@alandtse)](https://github.com/alandtse/tesla) as the Tesla Custom Integration for Home Assistant. This fork modifies the integration for use with [teslaHitch](https://github.com/martinsaul/teslaHitch). All upstream issues should be reported to the [original repository](https://github.com/alandtse/tesla); issues specific to the teslaHitch integration should be reported [here](https://github.com/martinsaul/teslahacs/issues).
 
 ---
 
@@ -106,7 +106,7 @@ Based on [alandtse/tesla](https://github.com/alandtse/tesla). Modified for use w
 [forum]: https://community.home-assistant.io/
 [license]: LICENSE
 [license-shield]: https://img.shields.io/github/license/alandtse/tesla.svg?style=for-the-badge
-[maintenance-shield]: https://img.shields.io/badge/maintainer-Martin%20Saul-blue.svg?style=for-the-badge
+[maintenance-shield]: https://img.shields.io/badge/maintainer-%40martinsaul-blue.svg?style=for-the-badge
 [releases-shield]: https://img.shields.io/github/release/alandtse/tesla.svg?style=for-the-badge
 [releases]: https://github.com/alandtse/tesla/releases
 [download-all]: https://img.shields.io/github/downloads/alandtse/tesla/total?style=for-the-badge
