@@ -70,8 +70,12 @@ def _async_save_tokens(hass, config_entry, access_token, refresh_token, expirati
     )
 
 
-async def _async_refresh_tokens_from_hitch(hass, config_entry):
-    """Re-fetch tokens from teslahitch when the current ones are rejected."""
+async def _async_refresh_tokens_from_hitch(hass, config_entry, controller=None):
+    """Re-fetch tokens from teslahitch when the current ones are rejected.
+
+    If a controller is provided, also updates the controller's internal
+    connection state so teslajsonpy uses the fresh token immediately.
+    """
     teslahitch_url = config_entry.data.get(CONF_TESLAHITCH_URL)
     if not teslahitch_url:
         _LOGGER.warning("No teslahitch URL configured, cannot recover tokens")
@@ -80,13 +84,24 @@ async def _async_refresh_tokens_from_hitch(hass, config_entry):
     try:
         _LOGGER.info("Refreshing tokens from teslahitch at %s", teslahitch_url)
         hitch_config = await _fetch_teslahitch_config(hass, teslahitch_url)
-        _async_save_tokens(
-            hass,
-            config_entry,
-            access_token=hitch_config["access_token"],
-            refresh_token=hitch_config["refresh_token"],
-            expiration=hitch_config.get("expiration", 0),
-        )
+        access_token = hitch_config["access_token"]
+        refresh_token = hitch_config["refresh_token"]
+        expiration = hitch_config.get("expiration", 0)
+
+        _async_save_tokens(hass, config_entry, access_token, refresh_token, expiration)
+
+        if controller is not None:
+            # Update teslajsonpy's internal state so it uses the fresh token
+            # and doesn't try to refresh on its own (which would fail without audience)
+            # Access the private __connection via Python name mangling
+            conn = getattr(controller, "_Controller__connection", None)
+            if conn:
+                conn.access_token = access_token
+                conn.refresh_token = refresh_token
+                conn.expiration = expiration
+                conn._Connection__sethead(access_token=access_token, expiration=expiration)
+                _LOGGER.debug("Updated controller connection with fresh teslahitch token")
+
         _LOGGER.info("Tokens refreshed from teslahitch successfully")
         return True
     except Exception as ex:
@@ -283,6 +298,10 @@ async def async_setup_entry(hass, config_entry):
     config_entry.async_on_unload(_async_create_close_task)
 
     _async_save_tokens(hass, config_entry, access_token, refresh_token, expiration)
+
+    # After connect(), teslajsonpy may have refreshed the token without the Fleet API
+    # audience parameter, making it invalid. Re-inject teslahitch's valid token.
+    await _async_refresh_tokens_from_hitch(hass, config_entry, controller)
 
     try:
         if config_entry.data.get("initial_setup"):
@@ -483,6 +502,21 @@ class TeslaDataUpdateCoordinator(DataUpdateCoordinator):
     async def _async_update_data(self):
         """Fetch data from API endpoint."""
         controller = self.controller
+
+        # Proactively refresh tokens from teslahitch before they expire.
+        # teslajsonpy's built-in refresh doesn't include the Fleet API audience,
+        # so we must refresh through teslahitch to get valid Fleet API tokens.
+        import calendar, datetime
+        now = calendar.timegm(datetime.datetime.now().timetuple())
+        conn = getattr(controller, "_Controller__connection", None)
+        token_expiration = conn.expiration if conn else 0
+        # Refresh if token expires within 5 minutes
+        if token_expiration and now > (token_expiration - 300):
+            _LOGGER.info("Token expiring soon, refreshing from teslahitch...")
+            await _async_refresh_tokens_from_hitch(
+                self.hass, self.config_entry, controller
+            )
+
         if controller.is_token_refreshed():
             # It doesn't matter which coordinator calls this, as long as there
             # are no awaits in the below code, it will be called only once.
@@ -520,7 +554,7 @@ class TeslaDataUpdateCoordinator(DataUpdateCoordinator):
                 _LOGGER.warning(
                     "Tesla API returned 403 during update, recovering tokens from teslahitch..."
                 )
-                if await _async_refresh_tokens_from_hitch(self.hass, self.config_entry):
+                if await _async_refresh_tokens_from_hitch(self.hass, self.config_entry, self.controller):
                     if self.reload_lock.locked():
                         return
                     async with self.reload_lock:
