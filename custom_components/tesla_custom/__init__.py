@@ -1,6 +1,8 @@
 """Support for Tesla cars."""
 
 import asyncio
+import calendar
+import datetime
 from datetime import timedelta
 from functools import partial
 from http import HTTPStatus
@@ -73,6 +75,10 @@ def _async_save_tokens(hass, config_entry, access_token, refresh_token, expirati
 async def _async_refresh_tokens_from_hitch(hass, config_entry, controller=None):
     """Re-fetch tokens from teslahitch when the current ones are rejected.
 
+    teslaHitch is the sole token authority — it proactively refreshes every 2h
+    so tokens returned here always have ~8h of life. teslajsonpy must never
+    refresh independently because Tesla rotates refresh tokens on each use.
+
     If a controller is provided, also updates the controller's internal
     connection state so teslajsonpy uses the fresh token immediately.
     """
@@ -85,15 +91,13 @@ async def _async_refresh_tokens_from_hitch(hass, config_entry, controller=None):
         _LOGGER.info("Refreshing tokens from teslahitch at %s", teslahitch_url)
         hitch_config = await _fetch_teslahitch_config(hass, teslahitch_url)
         access_token = hitch_config["access_token"]
-        refresh_token = hitch_config["refresh_token"]
+        # refresh_token may not be present — teslaHitch is the sole refresher
+        refresh_token = hitch_config.get("refresh_token", config_entry.data.get(CONF_TOKEN, ""))
         expiration = hitch_config.get("expiration", 0)
 
         _async_save_tokens(hass, config_entry, access_token, refresh_token, expiration)
 
         if controller is not None:
-            # Update teslajsonpy's internal state so it uses the fresh token
-            # and doesn't try to refresh on its own (which would fail without audience)
-            # Access the private __connection via Python name mangling
             conn = getattr(controller, "_Controller__connection", None)
             if conn:
                 conn.access_token = access_token
@@ -503,31 +507,31 @@ class TeslaDataUpdateCoordinator(DataUpdateCoordinator):
         """Fetch data from API endpoint."""
         controller = self.controller
 
-        # Proactively refresh tokens from teslahitch before they expire.
+        # Proactively refresh tokens from teslahitch well before they expire.
         # teslajsonpy's built-in refresh doesn't include the Fleet API audience,
-        # so we must refresh through teslahitch to get valid Fleet API tokens.
-        import calendar, datetime
+        # so we MUST refresh through teslahitch to get valid Fleet API tokens.
+        # Using a 30-minute buffer ensures teslajsonpy never sees a near-expiry
+        # token and tries to refresh independently (which would rotate the
+        # refresh token and break teslaHitch's copy).
         now = calendar.timegm(datetime.datetime.now().timetuple())
         conn = getattr(controller, "_Controller__connection", None)
         token_expiration = conn.expiration if conn else 0
-        # Refresh if token expires within 5 minutes
-        if token_expiration and now > (token_expiration - 300):
-            _LOGGER.info("Token expiring soon, refreshing from teslahitch...")
+        if token_expiration and now > (token_expiration - 1800):
+            _LOGGER.info("Token expiring within 30 min, refreshing from teslahitch...")
             await _async_refresh_tokens_from_hitch(
                 self.hass, self.config_entry, controller
             )
 
         if controller.is_token_refreshed():
-            # It doesn't matter which coordinator calls this, as long as there
-            # are no awaits in the below code, it will be called only once.
-            result = controller.get_tokens()
-            refresh_token = result["refresh_token"]
-            access_token = result["access_token"]
-            expiration = result["expiration"]
-            _async_save_tokens(
-                self.hass, self.config_entry, access_token, refresh_token, expiration
+            # teslajsonpy refreshed on its own — this is bad because it doesn't
+            # include the Fleet API audience and it rotates the refresh token.
+            # Override with teslahitch's authoritative tokens immediately.
+            _LOGGER.warning(
+                "teslajsonpy refreshed independently — overriding with teslahitch tokens"
             )
-            _LOGGER.debug("Saving new tokens in config_entry")
+            await _async_refresh_tokens_from_hitch(
+                self.hass, self.config_entry, controller
+            )
 
         data = None
         try:

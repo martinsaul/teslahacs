@@ -203,7 +203,7 @@ async def validate_input(hass: core.HomeAssistant, data) -> dict:
         _LOGGER.error("Cannot connect to teslahitch at %s: %s", teslahitch_url, ex)
         raise CannotConnect() from ex
 
-    refresh_token = hitch_config["refresh_token"]
+    refresh_token = hitch_config.get("refresh_token", "")
     client_id = hitch_config["client_id"]
     proxy_url = hitch_config["proxy_url"]
 
@@ -217,6 +217,7 @@ async def validate_input(hass: core.HomeAssistant, data) -> dict:
             async_client,
             email=data[CONF_USERNAME],
             refresh_token=refresh_token,
+            access_token=hitch_config.get("access_token", ""),
             update_interval=DEFAULT_SCAN_INTERVAL,
             expiration=hitch_config.get("expiration", 0),
             auth_domain=AUTH_DOMAIN,
