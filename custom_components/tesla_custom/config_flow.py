@@ -64,6 +64,7 @@ class TeslaConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
     def __init__(self) -> None:
         """Initialize the tesla flow."""
         self.username = None
+        self.teslahitch_url = None
         self.reauth = False
 
     async def async_step_import(self, import_config):
@@ -101,7 +102,7 @@ class TeslaConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
 
         data_schema = vol.Schema(
             {
-                vol.Required(CONF_TESLAHITCH_URL): str,
+                vol.Required(CONF_TESLAHITCH_URL, default=self.teslahitch_url): str,
                 vol.Required(CONF_USERNAME, default=self.username): str,
                 vol.Required(CONF_INCLUDE_VEHICLES, default=True): bool,
                 vol.Required(CONF_INCLUDE_ENERGYSITES, default=True): bool,
@@ -118,6 +119,7 @@ class TeslaConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
     async def async_step_reauth(self, data):
         """Handle configuration by re-auth."""
         self.username = data[CONF_USERNAME]
+        self.teslahitch_url = data.get(CONF_TESLAHITCH_URL)
         self.reauth = True
         return await self.async_step_user()
 

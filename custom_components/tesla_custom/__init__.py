@@ -230,8 +230,22 @@ async def async_setup_entry(hass, config_entry):
         expiration = result["expiration"]
 
     except IncompleteCredentials as ex:
-        await async_client.aclose()
-        raise ConfigEntryAuthFailed from ex
+        _LOGGER.warning(
+            "IncompleteCredentials during setup, attempting token recovery from teslahitch..."
+        )
+        if await _async_refresh_tokens_from_hitch(hass, config_entry):
+            try:
+                config = config_entry.data
+                controller, result = await _create_and_connect(config)
+                refresh_token = result["refresh_token"]
+                access_token = result["access_token"]
+                expiration = result["expiration"]
+            except Exception:
+                await async_client.aclose()
+                raise ConfigEntryAuthFailed from ex
+        else:
+            await async_client.aclose()
+            raise ConfigEntryAuthFailed from ex
 
     except (httpx.ConnectTimeout, httpx.ConnectError) as ex:
         await async_client.aclose()
@@ -239,8 +253,22 @@ async def async_setup_entry(hass, config_entry):
 
     except TeslaException as ex:
         if ex.code == HTTPStatus.UNAUTHORIZED:
-            await async_client.aclose()
-            raise ConfigEntryAuthFailed from ex
+            _LOGGER.warning(
+                "Tesla API returned 401 during setup, attempting token recovery from teslahitch..."
+            )
+            if await _async_refresh_tokens_from_hitch(hass, config_entry):
+                try:
+                    config = config_entry.data
+                    controller, result = await _create_and_connect(config)
+                    refresh_token = result["refresh_token"]
+                    access_token = result["access_token"]
+                    expiration = result["expiration"]
+                except Exception:
+                    await async_client.aclose()
+                    raise ConfigEntryAuthFailed from ex
+            else:
+                await async_client.aclose()
+                raise ConfigEntryAuthFailed from ex
 
         if ex.message in [
             "TOO_MANY_REQUESTS",
