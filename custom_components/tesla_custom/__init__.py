@@ -21,7 +21,7 @@ from homeassistant.const import (
     EVENT_HOMEASSISTANT_CLOSE,
 )
 from homeassistant.core import callback
-from homeassistant.exceptions import ConfigEntryAuthFailed, ConfigEntryNotReady
+from homeassistant.exceptions import ConfigEntryNotReady
 from homeassistant.helpers import config_validation as cv
 from homeassistant.helpers.event import async_call_later
 from homeassistant.helpers.httpx_client import SERVER_SOFTWARE, USER_AGENT
@@ -242,10 +242,14 @@ async def async_setup_entry(hass, config_entry):
                 expiration = result["expiration"]
             except Exception:
                 await async_client.aclose()
-                raise ConfigEntryAuthFailed from ex
+                raise ConfigEntryNotReady(
+                    "Token recovery from teslahitch succeeded but reconnection failed"
+                ) from ex
         else:
             await async_client.aclose()
-            raise ConfigEntryAuthFailed from ex
+            raise ConfigEntryNotReady(
+                "teslahitch token refresh failed, will retry automatically"
+            ) from ex
 
     except (httpx.ConnectTimeout, httpx.ConnectError) as ex:
         await async_client.aclose()
@@ -265,10 +269,14 @@ async def async_setup_entry(hass, config_entry):
                     expiration = result["expiration"]
                 except Exception:
                     await async_client.aclose()
-                    raise ConfigEntryAuthFailed from ex
+                    raise ConfigEntryNotReady(
+                        "Token recovery from teslahitch succeeded but reconnection failed"
+                    ) from ex
             else:
                 await async_client.aclose()
-                raise ConfigEntryAuthFailed from ex
+                raise ConfigEntryNotReady(
+                    "Tesla API returned 401, teslahitch token refresh failed. Will retry."
+                ) from ex
 
         if ex.message in [
             "TOO_MANY_REQUESTS",
