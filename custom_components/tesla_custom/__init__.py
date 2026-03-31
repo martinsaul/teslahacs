@@ -343,6 +343,76 @@ async def async_setup_entry(hass, config_entry):
     # audience parameter, making it invalid. Re-inject teslahitch's valid token.
     await _async_refresh_tokens_from_hitch(hass, config_entry, controller)
 
+    # --- Periodic proactive token refresh ---
+    # teslahitch tokens last ~8h. Refresh every 6h to leave a 2h buffer.
+    # On failure, retry every 10 minutes (up to 12 times = 2h of retries).
+    TOKEN_REFRESH_INTERVAL = 6 * 3600   # 6 hours
+    TOKEN_REFRESH_RETRY = 10 * 60       # 10 minutes
+    TOKEN_REFRESH_MAX_RETRIES = 12
+
+    async def _periodic_token_refresh(_now=None, _retry_count=0):
+        """Proactively refresh tokens from teslahitch on a timer."""
+        success = await _async_refresh_tokens_from_hitch(
+            hass, config_entry, controller
+        )
+        if success:
+            _LOGGER.info(
+                "Periodic token refresh succeeded, next refresh in %d hours",
+                TOKEN_REFRESH_INTERVAL // 3600,
+            )
+            _schedule_token_refresh(TOKEN_REFRESH_INTERVAL)
+        else:
+            if _retry_count < TOKEN_REFRESH_MAX_RETRIES:
+                _LOGGER.warning(
+                    "Periodic token refresh failed (attempt %d/%d), retrying in %d min",
+                    _retry_count + 1,
+                    TOKEN_REFRESH_MAX_RETRIES,
+                    TOKEN_REFRESH_RETRY // 60,
+                )
+                _schedule_token_refresh(
+                    TOKEN_REFRESH_RETRY,
+                    retry_count=_retry_count + 1,
+                )
+            else:
+                _LOGGER.error(
+                    "Periodic token refresh exhausted %d retries, reloading integration",
+                    TOKEN_REFRESH_MAX_RETRIES,
+                )
+                await hass.config_entries.async_reload(config_entry.entry_id)
+
+    def _schedule_token_refresh(delay, retry_count=0):
+        """Schedule the next token refresh, cancelling any pending one."""
+        cancel = async_call_later(
+            hass,
+            delay,
+            lambda _now: hass.async_create_task(
+                _periodic_token_refresh(_now, retry_count)
+            ),
+        )
+        # Store so we can cancel on unload and replace on reschedule
+        hass.data[DOMAIN][config_entry.entry_id]["_cancel_token_refresh"] = cancel
+
+    # Compute initial delay: time until 6h before expiry, or immediately if close
+    conn = getattr(controller, "_Controller__connection", None)
+    _token_exp = conn.expiration if conn else 0
+    if _token_exp:
+        _now_epoch = calendar.timegm(datetime.datetime.now().timetuple())
+        # expiration may be in milliseconds (teslahitch returns ms)
+        if _token_exp > 1e12:
+            _token_exp = _token_exp / 1000
+        _secs_until_expiry = _token_exp - _now_epoch
+        # Refresh 2 hours before expiry, but at least 60s from now
+        _initial_delay = max(60, _secs_until_expiry - 2 * 3600)
+        # Cap at 6 hours in case expiration is way in the future
+        _initial_delay = min(_initial_delay, TOKEN_REFRESH_INTERVAL)
+    else:
+        _initial_delay = TOKEN_REFRESH_INTERVAL
+
+    _LOGGER.info(
+        "Scheduling first proactive token refresh in %.1f hours",
+        _initial_delay / 3600,
+    )
+
     try:
         if config_entry.data.get("initial_setup"):
             wake_if_asleep = True
@@ -444,6 +514,9 @@ async def async_setup_entry(hass, config_entry):
     }
     _LOGGER.debug("Connected to the Tesla API")
 
+    # Start the proactive token refresh timer (defined earlier in this function)
+    _schedule_token_refresh(_initial_delay)
+
     # We do not do a first refresh as we already know the API is working
     # from above. Each platform will schedule a refresh via update_before_add
     # for the sites/vehicles they are interested in.
@@ -461,6 +534,10 @@ async def async_unload_entry(hass, config_entry) -> bool:
     entry_data = hass.data[DOMAIN][config_entry.entry_id]
     controller: TeslaAPI = entry_data["controller"]
     await controller.disconnect()
+
+    cancel_refresh = entry_data.get("_cancel_token_refresh")
+    if cancel_refresh:
+        cancel_refresh()
 
     for listener in entry_data[DATA_LISTENER]:
         listener()
