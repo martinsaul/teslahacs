@@ -1,35 +1,22 @@
 """Tesla Config Flow."""
 
-from http import HTTPStatus
 import logging
 
 from homeassistant import config_entries, core, exceptions
 from homeassistant.const import (
-    CONF_ACCESS_TOKEN,
-    CONF_CLIENT_ID,
-    CONF_DOMAIN,
     CONF_SCAN_INTERVAL,
-    CONF_TOKEN,
     CONF_USERNAME,
 )
 from homeassistant.core import callback
 from homeassistant.helpers import config_validation as cv
-from homeassistant.helpers.httpx_client import SERVER_SOFTWARE, USER_AGENT
 import httpx
-from teslajsonpy import Controller as TeslaAPI, TeslaException
-from teslajsonpy.const import AUTH_DOMAIN
-from teslajsonpy.exceptions import IncompleteCredentials
 import voluptuous as vol
 
 from .const import (
     ATTR_POLLING_POLICY_ALWAYS,
     ATTR_POLLING_POLICY_CONNECTED,
     ATTR_POLLING_POLICY_NORMAL,
-    CONF_API_PROXY_CERT,
-    CONF_API_PROXY_ENABLE,
-    CONF_API_PROXY_URL,
     CONF_ENABLE_TESLAMATE,
-    CONF_EXPIRATION,
     CONF_INCLUDE_ENERGYSITES,
     CONF_INCLUDE_VEHICLES,
     CONF_POLLING_POLICY,
@@ -186,9 +173,8 @@ class OptionsFlowHandler(config_entries.OptionsFlow):
 async def validate_input(hass: core.HomeAssistant, data) -> dict:
     """Validate the user input allows us to connect.
 
-    Fetches config from teslahitch and validates with Tesla API.
+    Fetches config from teslahitch and verifies it's reachable and authenticated.
     """
-
     teslahitch_url = data[CONF_TESLAHITCH_URL]
 
     try:
@@ -205,52 +191,14 @@ async def validate_input(hass: core.HomeAssistant, data) -> dict:
         _LOGGER.error("Cannot connect to teslahitch at %s: %s", teslahitch_url, ex)
         raise CannotConnect() from ex
 
-    refresh_token = hitch_config.get("refresh_token", "")
-    client_id = hitch_config["client_id"]
-    proxy_url = hitch_config["proxy_url"]
+    config = {
+        CONF_USERNAME: data[CONF_USERNAME],
+        CONF_INCLUDE_VEHICLES: data.get(CONF_INCLUDE_VEHICLES, True),
+        CONF_INCLUDE_ENERGYSITES: data.get(CONF_INCLUDE_ENERGYSITES, True),
+        CONF_TESLAHITCH_URL: teslahitch_url,
+    }
 
-    config = {}
-    async_client = httpx.AsyncClient(
-        headers={USER_AGENT: SERVER_SOFTWARE}, timeout=60, verify=SSL_CONTEXT
-    )
-
-    try:
-        controller = TeslaAPI(
-            async_client,
-            email=data[CONF_USERNAME],
-            refresh_token=refresh_token,
-            access_token=hitch_config.get("access_token", ""),
-            update_interval=DEFAULT_SCAN_INTERVAL,
-            expiration=hitch_config.get("expiration", 0),
-            auth_domain=AUTH_DOMAIN,
-            polling_policy=data.get(CONF_POLLING_POLICY, DEFAULT_POLLING_POLICY),
-            api_proxy_url=proxy_url,
-            client_id=client_id,
-        )
-        result = await controller.connect(test_login=True)
-        config[CONF_TOKEN] = result["refresh_token"]
-        config[CONF_ACCESS_TOKEN] = result[CONF_ACCESS_TOKEN]
-        config[CONF_EXPIRATION] = result[CONF_EXPIRATION]
-        config[CONF_USERNAME] = data[CONF_USERNAME]
-        config[CONF_DOMAIN] = AUTH_DOMAIN
-        config[CONF_INCLUDE_VEHICLES] = data[CONF_INCLUDE_VEHICLES]
-        config[CONF_INCLUDE_ENERGYSITES] = data[CONF_INCLUDE_ENERGYSITES]
-        config[CONF_API_PROXY_URL] = proxy_url
-        config[CONF_CLIENT_ID] = client_id
-        config[CONF_TESLAHITCH_URL] = teslahitch_url
-
-    except IncompleteCredentials as ex:
-        _LOGGER.error("Authentication error: %s %s", ex.message, ex)
-        raise InvalidAuth() from ex
-    except TeslaException as ex:
-        if ex.code == HTTPStatus.UNAUTHORIZED or isinstance(ex, IncompleteCredentials):
-            _LOGGER.error("Invalid credentials: %s", ex.message)
-            raise InvalidAuth() from ex
-        _LOGGER.error("Unable to communicate with Tesla API: %s", ex.message)
-        raise CannotConnect() from ex
-    finally:
-        await async_client.aclose()
-    _LOGGER.debug("Credentials successfully connected to the Tesla API")
+    _LOGGER.debug("Successfully connected to teslahitch")
     return config
 
 

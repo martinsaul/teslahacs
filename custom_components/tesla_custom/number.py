@@ -4,12 +4,13 @@ from homeassistant.components.number import NumberEntity, NumberMode
 from homeassistant.const import PERCENTAGE, UnitOfElectricCurrent
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.icon import icon_for_battery_level
-from teslajsonpy.const import (
+from .tesla_energy import (
     BACKUP_RESERVE_MAX,
     BACKUP_RESERVE_MIN,
-    CHARGE_CURRENT_MIN,
     RESOURCE_TYPE_BATTERY,
 )
+
+CHARGE_CURRENT_MIN = 2
 
 from .base import TeslaCarEntity, TeslaEnergyEntity
 from .const import DOMAIN

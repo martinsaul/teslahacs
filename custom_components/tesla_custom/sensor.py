@@ -23,9 +23,8 @@ from homeassistant.helpers.entity import EntityCategory
 from homeassistant.helpers.icon import icon_for_battery_level
 from homeassistant.util import dt
 from homeassistant.util.unit_conversion import DistanceConverter
-from teslajsonpy.car import TeslaCar
-from teslajsonpy.const import RESOURCE_TYPE_BATTERY, RESOURCE_TYPE_SOLAR
-from teslajsonpy.energy import EnergySite
+from .tesla_car import TeslaCar
+from .tesla_energy import EnergySite, RESOURCE_TYPE_BATTERY, RESOURCE_TYPE_SOLAR
 
 from . import TeslaDataUpdateCoordinator
 from .base import TeslaCarEntity, TeslaEnergyEntity
