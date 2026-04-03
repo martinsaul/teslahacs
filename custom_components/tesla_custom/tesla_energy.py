@@ -127,7 +127,7 @@ class EnergySite:
 
     async def _cmd(self, endpoint: str, body: dict | None = None):
         site_id = self.energysite_id
-        return await self._client.send_command(site_id, endpoint, body)
+        return await self._client.send_energy_command(site_id, endpoint, body)
 
     async def set_reserve_percent(self, value: int):
         return await self._cmd("backup", {"backup_reserve_percent": int(value)})

@@ -100,11 +100,27 @@ class TeslaHitchClient:
     async def get_energy_site_data(self, site_id: str) -> dict:
         """Fetch energy site live status."""
         await self._ensure_client()
-        url = f"{self.teslahitch_url}/internal/vehicles/{site_id}/live_status"
+        url = f"{self.teslahitch_url}/internal/energy_sites/{site_id}/live_status"
         resp = await self._client.get(url)
         resp.raise_for_status()
         data = resp.json()
         return data.get("response", data)
+
+    async def send_energy_command(
+        self, site_id: str, endpoint: str, body: dict | None = None
+    ) -> dict:
+        """Send a command to an energy site via teslaHitch."""
+        await self._ensure_client()
+        url = f"{self.teslahitch_url}/internal/energy_sites/{site_id}/{endpoint}"
+        body_str = json.dumps(body) if body else None
+        resp = await self._client.post(url, content=body_str, headers={
+            "Content-Type": "application/json"
+        } if body_str else None)
+        resp.raise_for_status()
+        try:
+            return resp.json()
+        except (json.JSONDecodeError, ValueError):
+            return {"result": resp.status_code == 200}
 
     async def send_command(
         self, vin: str, endpoint: str, body: dict | None = None
