@@ -20,7 +20,7 @@ from homeassistant.const import UnitOfLength, UnitOfSpeed
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.storage import Store
 from homeassistant.util.unit_conversion import DistanceConverter, SpeedConverter
-from teslajsonpy.car import TeslaCar
+from .tesla_car import TeslaCar
 
 from .const import TESLAMATE_STORAGE_KEY, TESLAMATE_STORAGE_VERSION
 
@@ -375,5 +375,5 @@ class TeslaMate:
                 value,
                 car.vin,
             )
-            state = car._car
+            state = car._car_data
             state[attr] = value

@@ -7,7 +7,7 @@ from homeassistant.components.binary_sensor import (
     BinarySensorEntity,
 )
 from homeassistant.core import HomeAssistant
-from teslajsonpy.const import GRID_ACTIVE, RESOURCE_TYPE_BATTERY
+from .tesla_energy import GRID_ACTIVE, RESOURCE_TYPE_BATTERY
 
 from .base import TeslaCarEntity, TeslaEnergyEntity
 from .const import DOMAIN

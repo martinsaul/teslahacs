@@ -3,7 +3,7 @@
 from homeassistant.components.text import TextEntity, TextMode
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.entity import EntityCategory
-from teslajsonpy.car import TeslaCar
+from .tesla_car import TeslaCar
 
 from . import TeslaDataUpdateCoordinator
 from .base import TeslaCarEntity

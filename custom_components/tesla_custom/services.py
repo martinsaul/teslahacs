@@ -1,14 +1,10 @@
-"""Support for Tesla services.
-
-SPDX-License-Identifier: Apache-2.0
-"""
+"""Support for Tesla services."""
 
 import logging
 
 from homeassistant.const import ATTR_COMMAND, CONF_EMAIL, CONF_SCAN_INTERVAL
 from homeassistant.core import callback
 from homeassistant.helpers import config_validation as cv
-from teslajsonpy import Controller
 import voluptuous as vol
 
 from .const import (
@@ -20,6 +16,7 @@ from .const import (
     SERVICE_API,
     SERVICE_SCAN_INTERVAL,
 )
+from .tesla_client import TeslaHitchClient
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -43,6 +40,18 @@ SCAN_INTERVAL_SCHEMA = vol.Schema(
 )
 
 
+def _get_controller(hass, email: str = "") -> TeslaHitchClient:
+    """Get the TeslaHitchClient for a given email (or the only one)."""
+    entries = hass.config_entries.async_entries(DOMAIN)
+    if len(entries) > 1 and not email:
+        raise ValueError("Email address missing")
+    for entry in entries:
+        if len(entries) > 1 and entry.title != email:
+            continue
+        return hass.data[DOMAIN][entry.entry_id]["controller"]
+    raise ValueError(f"No Tesla controllers found for email {email}")
+
+
 @callback
 def async_setup_services(hass) -> None:
     """Set up services for Tesla integration."""
@@ -50,14 +59,10 @@ def async_setup_services(hass) -> None:
     async def async_call_tesla_service(service_call) -> None:
         """Call correct Tesla service."""
         service = service_call.service
-        response = None
-
         if service == SERVICE_API:
-            response = await api(service_call)
+            return await api(service_call)
         elif service == SERVICE_SCAN_INTERVAL:
-            response = await set_update_interval(service_call)
-
-        return response
+            return await set_update_interval(service_call)
 
     hass.services.async_register(
         DOMAIN,
@@ -76,34 +81,11 @@ def async_setup_services(hass) -> None:
     )
 
     async def api(call):
-        """Handle api service request.
-
-        Arguments
-            call.CONF_EMAIL {str: ""} -- email, optional
-            call.ATTR_COMMAND {str: ""} -- Command
-            call.ATTR_PARAMETERS {dict:} -- Parameters dictionary
-
-        Returns
-            bool -- True if api called successfully
-
-        """
-        _LOGGER.debug("call %s", call)
+        """Handle api service request."""
         service_data = call.data
         email = service_data.get(CONF_EMAIL, "")
+        controller = _get_controller(hass, email)
 
-        if len(hass.config_entries.async_entries(DOMAIN)) > 1 and not email:
-            raise ValueError("Email address missing")
-        controller: Controller = None
-        for entry in hass.config_entries.async_entries(DOMAIN):
-            if (
-                len(hass.config_entries.async_entries(DOMAIN)) > 1
-                and entry.title != email
-            ):
-                continue
-            entry_data = hass.data[DOMAIN][entry.entry_id]
-            controller = entry_data["controller"]
-        if controller is None:
-            raise ValueError(f"No Tesla controllers found for email {email}")
         command = call.data.get(ATTR_COMMAND)
         parameters: dict = call.data.get(ATTR_PARAMETERS, {})
         _LOGGER.debug(
@@ -113,38 +95,13 @@ def async_setup_services(hass) -> None:
             parameters,
         )
         path_vars = parameters.pop(ATTR_PATH_VARS, {})
-        response = await controller.api(name=command, path_vars=path_vars, **parameters)
-        return response
+        return await controller.api(name=command, path_vars=path_vars, **parameters)
 
     async def set_update_interval(call):
-        """Handle api service request.
-
-        Arguments
-            call.CONF_EMAIL {str: ""} -- email, optional
-            call.ATTR_VIN {str: ""} -- vehicle VIN, optional
-            call.CONF_SCAN_INTERVAL {int: 660} -- New scan interval
-
-        Returns
-            bool -- True if new interval is set
-
-        """
-        _LOGGER.debug("call %s", call)
+        """Handle polling interval service request."""
         service_data = call.data
         email = service_data.get(CONF_EMAIL, "")
-
-        if len(hass.config_entries.async_entries(DOMAIN)) > 1 and not email:
-            raise ValueError("Email address missing")
-        controller: Controller = None
-        for entry in hass.config_entries.async_entries(DOMAIN):
-            if (
-                len(hass.config_entries.async_entries(DOMAIN)) > 1
-                and entry.title != email
-            ):
-                continue
-            entry_data = hass.data[DOMAIN][entry.entry_id]
-            controller = entry_data["controller"]
-        if controller is None:
-            raise ValueError(f"No Tesla controllers found for email {email}")
+        controller = _get_controller(hass, email)
 
         vin = service_data.get(ATTR_VIN, "")
         update_interval = service_data.get(CONF_SCAN_INTERVAL, DEFAULT_SCAN_INTERVAL)

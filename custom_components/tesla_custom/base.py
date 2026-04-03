@@ -4,9 +4,9 @@ from homeassistant.core import callback
 from homeassistant.helpers.entity import DeviceInfo
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
 from homeassistant.util import slugify
-from teslajsonpy.car import TeslaCar
-from teslajsonpy.const import RESOURCE_TYPE_BATTERY
-from teslajsonpy.energy import EnergySite
+
+from .tesla_car import TeslaCar
+from .tesla_energy import EnergySite, RESOURCE_TYPE_BATTERY
 
 from . import TeslaDataUpdateCoordinator
 from .const import ATTRIBUTION, DOMAIN
@@ -75,31 +75,20 @@ class TeslaCarEntity(TeslaBaseEntity):
             prev_last_update_success == current_last_update_success
             and prev_last_update_time == current_last_update_time
         ):
-            # If there was no change in the last update success or time,
-            # avoid writing state to prevent unnecessary entity updates.
             return
         super()._handle_coordinator_update()
 
     async def update_controller(
         self, *, wake_if_asleep: bool = False, force: bool = True, blocking: bool = True
     ) -> None:
-        """Get the latest data from Tesla.
-
-        This does a controller update then a coordinator update.
-        The coordinator triggers a call to the refresh function.
-
-        Setting the blocking param to False will create a background task for the update.
-        """
-
+        """Get the latest data from Tesla."""
         if blocking is False:
             await self.hass.async_create_task(
                 self.update_controller(wake_if_asleep=wake_if_asleep, force=force)
             )
             return
 
-        await self.coordinator.controller.update(
-            self._car.id, wake_if_asleep=wake_if_asleep, force=force
-        )
+        await self._car.update(wake_if_asleep=wake_if_asleep, force=force)
         await self.coordinator.async_refresh()
 
     @property
@@ -123,7 +112,6 @@ class TeslaEnergyEntity(TeslaBaseEntity):
         if energysite.resource_type == RESOURCE_TYPE_BATTERY:
             sw_version = energysite.version
         else:
-            # Non-Powerwall sites do not provide version info
             sw_version = "Unavailable"
         self._attr_device_info = DeviceInfo(
             identifiers={(DOMAIN, energysite_id)},
