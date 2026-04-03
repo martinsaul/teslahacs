@@ -25,5 +25,5 @@
   "issue_tracker": "https://github.com/martinsaul/teslahacs/issues",
   "loggers": ["tesla_custom"],
   "requirements": ["httpx>=0.24.0", "async-timeout>=4.0.0"],
-  "version": "4.0.0"
+  "version": "4.0.1"
 }
