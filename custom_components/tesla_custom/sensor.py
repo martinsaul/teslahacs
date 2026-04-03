@@ -1,7 +1,8 @@
 """Support for the Tesla sensors."""
 
+from __future__ import annotations
+
 from datetime import datetime, timedelta
-from typing import Optional
 
 from homeassistant.components.sensor import (
     SensorDeviceClass,
@@ -477,12 +478,12 @@ class TeslaCarTimeChargeComplete(TeslaCarEntity, SensorEntity):
     type = "time charge complete"
     _attr_device_class = SensorDeviceClass.TIMESTAMP
     _attr_icon = "mdi:timer-plus"
-    _value: Optional[datetime] = None
-    _last_known_value: Optional[int] = None
-    _last_update_time: Optional[datetime] = None
+    _value: datetime | None = None
+    _last_known_value: int | None = None
+    _last_update_time: datetime | None = None
 
     @property
-    def native_value(self) -> Optional[datetime]:
+    def native_value(self) -> datetime | None:
         """Return time charge complete."""
         if self._car.time_to_full_charge is None:
             charge_hours = 0
@@ -568,12 +569,12 @@ class TeslaCarArrivalTime(TeslaCarEntity, SensorEntity):
     type = "arrival time"
     _attr_device_class = SensorDeviceClass.TIMESTAMP
     _attr_icon = "mdi:timer-sand"
-    _datetime_value: Optional[datetime] = None
-    _last_known_value: Optional[int] = None
-    _last_update_time: Optional[datetime] = None
+    _datetime_value: datetime | None = None
+    _last_known_value: int | None = None
+    _last_update_time: datetime | None = None
 
     @property
-    def native_value(self) -> Optional[datetime]:
+    def native_value(self) -> datetime | None:
         """Return route arrival time."""
         if self._car.active_route_minutes_to_arrival is None:
             return self._datetime_value

@@ -7,27 +7,18 @@ import logging
 from typing import Any
 
 import async_timeout
-from homeassistant.config_entries import SOURCE_IMPORT
-from homeassistant.const import (
-    CONF_SCAN_INTERVAL,
-    CONF_TOKEN,
-    CONF_USERNAME,
-)
+from homeassistant.const import CONF_SCAN_INTERVAL
 from homeassistant.core import callback
 from homeassistant.exceptions import ConfigEntryNotReady
-from homeassistant.helpers import config_validation as cv
 from homeassistant.helpers.event import async_call_later
 from homeassistant.helpers.update_coordinator import DataUpdateCoordinator, UpdateFailed
 
-from .config_flow import CannotConnect, InvalidAuth, validate_input
 from .const import (
     CONF_ENABLE_TESLAMATE,
-    CONF_POLLING_POLICY,
     CONF_TESLAHITCH_URL,
     CONF_WAKE_ON_START,
     DATA_LISTENER,
     DEFAULT_ENABLE_TESLAMATE,
-    DEFAULT_POLLING_POLICY,
     DEFAULT_SCAN_INTERVAL,
     DEFAULT_WAKE_ON_START,
     DOMAIN,
@@ -40,85 +31,14 @@ from .teslamate import TeslaMate
 
 _LOGGER = logging.getLogger(__name__)
 
-CONFIG_SCHEMA = cv.empty_config_schema(DOMAIN)
-
-
-@callback
-def _async_configured_emails(hass):
-    """Return a set of configured Tesla emails."""
-    return {
-        entry.data[CONF_USERNAME]
-        for entry in hass.config_entries.async_entries(DOMAIN)
-        if CONF_USERNAME in entry.data
-    }
-
-
-async def async_setup(hass, base_config):
-    """Set up of Tesla component."""
-
-    def _update_entry(email, data=None, options=None):
-        data = data or {}
-        options = options or {
-            CONF_SCAN_INTERVAL: DEFAULT_SCAN_INTERVAL,
-            CONF_WAKE_ON_START: DEFAULT_WAKE_ON_START,
-            CONF_POLLING_POLICY: DEFAULT_POLLING_POLICY,
-        }
-        for entry in hass.config_entries.async_entries(DOMAIN):
-            if email != entry.title:
-                continue
-            hass.config_entries.async_update_entry(entry, data=data, options=options)
-
-    config = base_config.get(DOMAIN)
-
-    if not config:
-        return True
-
-    email = config[CONF_USERNAME]
-    token = config[CONF_TOKEN]
-    scan_interval = config[CONF_SCAN_INTERVAL]
-
-    if email in _async_configured_emails(hass):
-        try:
-            info = await validate_input(hass, config)
-        except (CannotConnect, InvalidAuth):
-            return False
-        _update_entry(
-            email,
-            data={
-                CONF_USERNAME: email,
-                **info,
-            },
-            options={CONF_SCAN_INTERVAL: scan_interval},
-        )
-    else:
-        hass.async_create_task(
-            hass.config_entries.flow.async_init(
-                DOMAIN,
-                context={"source": SOURCE_IMPORT},
-                data={CONF_USERNAME: email, CONF_TOKEN: token},
-            )
-        )
-        hass.data.setdefault(DOMAIN, {})
-        hass.data[DOMAIN][email] = {CONF_SCAN_INTERVAL: scan_interval}
-
-    return True
-
 
 async def async_setup_entry(hass, config_entry):
     """Set up Tesla as config entry."""
     hass.data.setdefault(DOMAIN, {})
     config = config_entry.data
-    email = config_entry.title
 
     if not hass.data[DOMAIN]:
         async_setup_services(hass)
-
-    if email in hass.data[DOMAIN] and CONF_SCAN_INTERVAL in hass.data[DOMAIN][email]:
-        scan_interval = hass.data[DOMAIN][email][CONF_SCAN_INTERVAL]
-        hass.config_entries.async_update_entry(
-            config_entry, options={CONF_SCAN_INTERVAL: scan_interval}
-        )
-        hass.data[DOMAIN].pop(email)
 
     teslahitch_url = config.get(CONF_TESLAHITCH_URL)
     if not teslahitch_url:
@@ -188,12 +108,9 @@ async def async_setup_entry(hass, config_entry):
     if car_coordinators:
         update_vehicles_coordinator = _partial_coordinator(update_vehicles=True)
         coordinators["update_vehicles"] = update_vehicles_coordinator
-
-        @callback
-        def _async_update_vehicles():
-            """Update vehicles coordinator."""
-
-        update_vehicles_coordinator.async_add_listener(_async_update_vehicles)
+        # The update_vehicles coordinator needs a listener to keep it polling,
+        # even though individual car coordinators handle their own updates.
+        update_vehicles_coordinator.async_add_listener(lambda: None)
 
     teslamate = TeslaMate(hass=hass, cars=cars, coordinators=coordinators)
 
@@ -229,13 +146,12 @@ async def async_unload_entry(hass, config_entry) -> bool:
 
     for listener in entry_data[DATA_LISTENER]:
         listener()
-    username = config_entry.title
 
     await entry_data["teslamate"].unload()
 
     if unload_ok:
         hass.data[DOMAIN].pop(config_entry.entry_id)
-        _LOGGER.debug("Unloaded entry for %s", username)
+        _LOGGER.debug("Unloaded entry for %s", config_entry.title)
 
         if not hass.data[DOMAIN]:
             async_unload_services(hass)
@@ -291,7 +207,7 @@ class TeslaDataUpdateCoordinator(DataUpdateCoordinator):
         self.energy_site_ids = {energy_site_id} if energy_site_id else set()
         self.update_vehicles = update_vehicles
         self._cancel_debounce_timer = None
-        self._last_update_time = None
+        self._debounce_last_run = None
         self.last_update_time: float | None = None
         self.assumed_state = True
 
@@ -311,7 +227,6 @@ class TeslaDataUpdateCoordinator(DataUpdateCoordinator):
         data = None
         try:
             async with async_timeout.timeout(30):
-                _LOGGER.debug("Running controller.update()")
                 data = await controller.update(
                     vins=self.vins,
                     energy_site_ids=self.energy_site_ids,
@@ -356,25 +271,21 @@ class TeslaDataUpdateCoordinator(DataUpdateCoordinator):
         """Debounced version of async_update_listeners."""
         if self._cancel_debounce_timer:
             self._cancel_debounce_timer()
-            _LOGGER.debug("Previous debounce task cancelled")
 
         self._cancel_debounce_timer = async_call_later(
             self.hass, delay_since_last, partial(self._async_debounced, max_delay)
         )
-        _LOGGER.debug("New debounce task scheduled")
 
     @callback
     def _async_debounced(self, max_delay: float, *args: Any) -> None:
         """Debounce method that waits a certain delay since the last update."""
         now = self.hass.loop.time()
-        if not self._last_update_time or now - self._last_update_time >= max_delay:
-            self._last_update_time = now
+        if not self._debounce_last_run or now - self._debounce_last_run >= max_delay:
+            self._debounce_last_run = now
             self.async_update_listeners()
-            _LOGGER.debug("Listeners updated")
         else:
             self._cancel_debounce_timer = async_call_later(
                 self.hass,
-                max_delay - (now - self._last_update_time),
+                max_delay - (now - self._debounce_last_run),
                 partial(self._async_debounced, max_delay),
             )
-            _LOGGER.debug("Max delay not reached, scheduling another debounce task")

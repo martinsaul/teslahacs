@@ -5,6 +5,7 @@ which handles all token management, auth, and proxies commands to the
 Tesla Fleet API via tesla_http_proxy.
 """
 
+import json
 import logging
 import time
 
@@ -111,16 +112,14 @@ class TeslaHitchClient:
         """Send a command to a vehicle via teslaHitch."""
         await self._ensure_client()
         url = f"{self.teslahitch_url}/internal/vehicles/{vin}/command/{endpoint}"
-        import json as _json
-
-        body_str = _json.dumps(body) if body else None
+        body_str = json.dumps(body) if body else None
         resp = await self._client.post(url, content=body_str, headers={
             "Content-Type": "application/json"
         } if body_str else None)
         resp.raise_for_status()
         try:
             return resp.json()
-        except Exception:
+        except (json.JSONDecodeError, ValueError):
             return {"result": resp.status_code == 200}
 
     async def wake_up(self, vin: str) -> dict:
@@ -131,7 +130,7 @@ class TeslaHitchClient:
         resp.raise_for_status()
         try:
             return resp.json()
-        except Exception:
+        except (json.JSONDecodeError, ValueError):
             return {}
 
     # ------------------------------------------------------------------
