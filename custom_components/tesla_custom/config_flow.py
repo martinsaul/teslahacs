@@ -35,8 +35,8 @@ _LOGGER = logging.getLogger(__name__)
 
 
 async def _fetch_teslahitch_config(hass: core.HomeAssistant, teslahitch_url: str) -> dict:
-    """Fetch configuration from teslahitch /api/ha/config endpoint."""
-    url = f"{teslahitch_url.rstrip('/')}/api/ha/config"
+    """Fetch configuration from teslahitch /internal/ha/config endpoint."""
+    url = f"{teslahitch_url.rstrip('/')}/internal/ha/config"
     async with httpx.AsyncClient(verify=SSL_CONTEXT, timeout=10) as client:
         resp = await client.get(url)
         resp.raise_for_status()

@@ -67,7 +67,7 @@ class TeslaHitchClient:
     async def get_config(self) -> dict:
         """Fetch config from teslaHitch (tokens, client_id, proxy_url)."""
         await self._ensure_client()
-        url = f"{self.teslahitch_url}/api/ha/config"
+        url = f"{self.teslahitch_url}/internal/ha/config"
         resp = await self._client.get(url)
         resp.raise_for_status()
         return resp.json()
