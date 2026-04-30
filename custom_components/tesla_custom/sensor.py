@@ -658,11 +658,25 @@ class TeslaCarPollingInterval(TeslaCarEntity, SensorEntity):
     type = "polling interval"
     _attr_device_class = SensorDeviceClass.DURATION
     _attr_state_class = SensorStateClass.MEASUREMENT
-    _attr_native_unit_of_measurement = UnitOfTime.SECONDS
     _attr_entity_category = EntityCategory.DIAGNOSTIC
     _attr_icon = "mdi:timer-sync"
 
     @property
-    def native_value(self) -> int:
-        """Return the update time interval."""
-        return self.coordinator.controller.get_update_interval_vin(vin=self._car.vin)
+    def native_unit_of_measurement(self) -> str:
+        """Return the best human-readable unit for the current interval."""
+        seconds = self.coordinator.controller.get_update_interval_vin(vin=self._car.vin)
+        if seconds >= 7200 and seconds % 3600 == 0:
+            return UnitOfTime.HOURS
+        if seconds >= 120 and seconds % 60 == 0:
+            return UnitOfTime.MINUTES
+        return UnitOfTime.SECONDS
+
+    @property
+    def native_value(self) -> float:
+        """Return the update time interval in the best human-readable unit."""
+        seconds = self.coordinator.controller.get_update_interval_vin(vin=self._car.vin)
+        if seconds >= 7200 and seconds % 3600 == 0:
+            return seconds / 3600
+        if seconds >= 120 and seconds % 60 == 0:
+            return seconds / 60
+        return seconds

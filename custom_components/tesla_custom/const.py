@@ -1,6 +1,6 @@
 """Const file for Tesla cars."""
 
-VERSION = "4.0.2"
+VERSION = "4.0.3"
 CONF_INCLUDE_VEHICLES = "include_vehicles"
 CONF_INCLUDE_ENERGYSITES = "include_energysites"
 CONF_POLLING_POLICY = "polling_policy"
@@ -13,7 +13,8 @@ DATA_LISTENER = "listener"
 DEFAULT_SCAN_INTERVAL = 660
 DEFAULT_WAKE_ON_START = False
 DEFAULT_ENABLE_TESLAMATE = False
-MIN_SCAN_INTERVAL = 10
+MIN_SCAN_INTERVAL = 15
+MAX_SCAN_INTERVAL = 86400
 
 PLATFORMS = [
     "sensor",

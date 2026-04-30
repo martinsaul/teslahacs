@@ -9,6 +9,11 @@ from homeassistant.const import (
 )
 from homeassistant.core import callback
 from homeassistant.helpers import config_validation as cv
+from homeassistant.helpers.selector import (
+    NumberSelector,
+    NumberSelectorConfig,
+    NumberSelectorMode,
+)
 import httpx
 import voluptuous as vol
 
@@ -27,6 +32,7 @@ from .const import (
     DEFAULT_SCAN_INTERVAL,
     DEFAULT_WAKE_ON_START,
     DOMAIN,
+    MAX_SCAN_INTERVAL,
     MIN_SCAN_INTERVAL,
 )
 from .util import SSL_CONTEXT
@@ -140,7 +146,15 @@ class OptionsFlowHandler(config_entries.OptionsFlow):
                     default=self.config_entry.options.get(
                         CONF_SCAN_INTERVAL, DEFAULT_SCAN_INTERVAL
                     ),
-                ): vol.All(cv.positive_int, vol.Clamp(min=MIN_SCAN_INTERVAL)),
+                ): NumberSelector(
+                    NumberSelectorConfig(
+                        min=MIN_SCAN_INTERVAL,
+                        max=MAX_SCAN_INTERVAL,
+                        step=15,
+                        unit_of_measurement="seconds",
+                        mode=NumberSelectorMode.SLIDER,
+                    )
+                ),
                 vol.Optional(
                     CONF_WAKE_ON_START,
                     default=self.config_entry.options.get(

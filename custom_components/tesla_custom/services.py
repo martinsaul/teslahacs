@@ -34,7 +34,7 @@ SCAN_INTERVAL_SCHEMA = vol.Schema(
         vol.Optional(CONF_EMAIL): vol.All(cv.string, vol.Length(min=1)),
         vol.Optional(ATTR_VIN): vol.All(cv.string, vol.Length(min=1)),
         vol.Required(CONF_SCAN_INTERVAL, default=DEFAULT_SCAN_INTERVAL): vol.All(
-            vol.Coerce(int), vol.Range(min=-1, max=3600)
+            vol.Coerce(int), vol.Range(min=-1, max=86400)
         ),
     }
 )
