@@ -243,13 +243,24 @@ class TeslaHitchClient:
         """Fetch latest data for specified vehicles/energy sites.
 
         Returns the raw data dict. Updates internal TeslaCar/EnergySite
-        objects in-place.
+        objects in-place. Real API calls are throttled to update_interval
+        seconds per vehicle/site; cached data is returned between calls.
         """
         result = {}
+        now = time.time()
 
         for vin in vins or set():
             if not vin or not self._polling_enabled.get(vin, True):
                 continue
+
+            last_update = self._last_update_times.get(vin, 0)
+            interval = self._update_intervals.get(vin, self.update_interval)
+            if last_update and now - last_update < interval:
+                car = self._cars.get(vin)
+                if car:
+                    result[vin] = car._vehicle_data
+                continue
+
             try:
                 data = await self.get_vehicle_data(vin)
                 car = self._cars.get(vin)
@@ -273,31 +284,44 @@ class TeslaHitchClient:
         for site_id in energy_site_ids or set():
             if not site_id:
                 continue
+
+            last_update = self._last_update_times.get(site_id, 0)
+            if last_update and now - last_update < self.update_interval:
+                site = self._energysites.get(site_id)
+                if site:
+                    result[site_id] = site._live_data
+                continue
+
             try:
                 data = await self.get_energy_site_data(site_id)
                 site = self._energysites.get(site_id)
                 if site:
                     site._live_data = data
+                self._last_update_times[site_id] = time.time()
                 result[site_id] = data
             except Exception as ex:
                 _LOGGER.warning("Failed to update energy site %s: %s", site_id, ex)
                 result[site_id] = None
 
         if update_vehicles:
-            # Re-fetch the products list to detect new/removed vehicles
-            try:
-                products = await self.list_products()
-                for product in products:
-                    vin = product.get("vin")
-                    if vin:
-                        self._car_online_status[vin] = (
-                            product.get("state") == "online"
-                        )
-                        car = self._cars.get(vin)
-                        if car:
-                            car._car_data = product
-            except Exception as ex:
-                _LOGGER.debug("Failed to refresh vehicle list: %s", ex)
+            # Re-fetch the products list to detect new/removed vehicles,
+            # throttled to update_interval like vehicle data fetches.
+            last_update = self._last_update_times.get("__vehicle_list__", 0)
+            if not last_update or now - last_update >= self.update_interval:
+                try:
+                    products = await self.list_products()
+                    for product in products:
+                        vin = product.get("vin")
+                        if vin:
+                            self._car_online_status[vin] = (
+                                product.get("state") == "online"
+                            )
+                            car = self._cars.get(vin)
+                            if car:
+                                car._car_data = product
+                    self._last_update_times["__vehicle_list__"] = time.time()
+                except Exception as ex:
+                    _LOGGER.debug("Failed to refresh vehicle list: %s", ex)
 
         return result or None
 
