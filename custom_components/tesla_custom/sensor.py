@@ -74,7 +74,6 @@ async def async_setup_entry(hass: HomeAssistant, config_entry, async_add_entitie
         entities.append(TeslaCarArrivalTime(car, coordinator))
         entities.append(TeslaCarDistanceToArrival(car, coordinator))
         entities.append(TeslaCarDataUpdateTime(car, coordinator))
-        entities.append(TeslaCarPollingInterval(car, coordinator))
 
     for energy_site_id, energysite in energysites.items():
         coordinator = coordinators[energy_site_id]
@@ -652,31 +651,3 @@ class TeslaCarDataUpdateTime(TeslaCarEntity, SensorEntity):
         return date_obj
 
 
-class TeslaCarPollingInterval(TeslaCarEntity, SensorEntity):
-    """Representation of a Tesla car polling interval."""
-
-    type = "polling interval"
-    _attr_device_class = SensorDeviceClass.DURATION
-    _attr_state_class = SensorStateClass.MEASUREMENT
-    _attr_entity_category = EntityCategory.DIAGNOSTIC
-    _attr_icon = "mdi:timer-sync"
-
-    @property
-    def native_unit_of_measurement(self) -> str:
-        """Return the best human-readable unit for the current interval."""
-        seconds = self.coordinator.controller.get_update_interval_vin(vin=self._car.vin)
-        if seconds >= 7200 and seconds % 3600 == 0:
-            return UnitOfTime.HOURS
-        if seconds >= 120 and seconds % 60 == 0:
-            return UnitOfTime.MINUTES
-        return UnitOfTime.SECONDS
-
-    @property
-    def native_value(self) -> float:
-        """Return the update time interval in the best human-readable unit."""
-        seconds = self.coordinator.controller.get_update_interval_vin(vin=self._car.vin)
-        if seconds >= 7200 and seconds % 3600 == 0:
-            return seconds / 3600
-        if seconds >= 120 and seconds % 60 == 0:
-            return seconds / 60
-        return seconds

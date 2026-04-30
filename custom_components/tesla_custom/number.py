@@ -1,8 +1,9 @@
 """Support for Tesla numbers."""
 
 from homeassistant.components.number import NumberEntity, NumberMode
-from homeassistant.const import PERCENTAGE, UnitOfElectricCurrent
+from homeassistant.const import PERCENTAGE, UnitOfElectricCurrent, UnitOfTime
 from homeassistant.core import HomeAssistant
+from homeassistant.helpers.entity import EntityCategory
 from homeassistant.helpers.icon import icon_for_battery_level
 from .tesla_energy import (
     BACKUP_RESERVE_MAX,
@@ -13,7 +14,7 @@ from .tesla_energy import (
 CHARGE_CURRENT_MIN = 2
 
 from .base import TeslaCarEntity, TeslaEnergyEntity
-from .const import DOMAIN
+from .const import DOMAIN, MIN_SCAN_INTERVAL, MAX_SCAN_INTERVAL
 
 
 async def async_setup_entry(hass: HomeAssistant, config_entry, async_add_entities):
@@ -28,6 +29,7 @@ async def async_setup_entry(hass: HomeAssistant, config_entry, async_add_entitie
         coordinator = coordinators[vin]
         entities.append(TeslaCarChargeLimit(car, coordinator))
         entities.append(TeslaCarChargingAmps(car, coordinator))
+        entities.append(TeslaCarPollingInterval(car, coordinator))
 
     for energy_site_id, energysite in energysites.items():
         coordinator = coordinators[energy_site_id]
@@ -150,3 +152,31 @@ class TeslaEnergyBackupReserve(TeslaEnergyEntity, NumberEntity):
     def icon(self):
         """Return icon for the backup reserve."""
         return icon_for_battery_level(battery_level=self.native_value)
+
+
+class TeslaCarPollingInterval(TeslaCarEntity, NumberEntity):
+    """Adjustable polling interval slider for a Tesla car."""
+
+    type = "polling interval"
+    _attr_icon = "mdi:timer-sync"
+    _attr_mode = NumberMode.SLIDER
+    _attr_entity_category = EntityCategory.CONFIG
+    _attr_native_min_value = MIN_SCAN_INTERVAL
+    _attr_native_max_value = MAX_SCAN_INTERVAL
+    _attr_native_step = 15
+    _attr_native_unit_of_measurement = UnitOfTime.SECONDS
+
+    async def async_set_native_value(self, value: float) -> None:
+        """Set the polling interval in seconds."""
+        seconds = int(value)
+        self.coordinator.controller.set_update_interval_vin(
+            vin=self._car.vin, value=seconds
+        )
+        self.async_write_ha_state()
+
+    @property
+    def native_value(self) -> float:
+        """Return the current polling interval in seconds."""
+        return float(
+            self.coordinator.controller.get_update_interval_vin(vin=self._car.vin)
+        )
