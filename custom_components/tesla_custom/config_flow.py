@@ -152,7 +152,7 @@ class OptionsFlowHandler(config_entries.OptionsFlow):
                         max=MAX_SCAN_INTERVAL,
                         step=15,
                         unit_of_measurement="seconds",
-                        mode=NumberSelectorMode.SLIDER,
+                        mode=NumberSelectorMode.BOX,
                     )
                 ),
                 vol.Optional(
