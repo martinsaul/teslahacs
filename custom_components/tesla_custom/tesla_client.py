@@ -11,11 +11,17 @@ import time
 
 import httpx
 
+from .const import MAX_SCAN_INTERVAL
 from .util import SSL_CONTEXT
 
 _LOGGER = logging.getLogger(__name__)
 
 DEFAULT_TIMEOUT = 30
+
+# Backoff on consecutive fetch failures is capped here so a persistently
+# failing target (asleep car, Fleet API EXCEEDED_LIMIT, outage) is probed at
+# most once per this many seconds rather than every coordinator tick.
+MAX_BACKOFF_INTERVAL = MAX_SCAN_INTERVAL
 
 
 class TeslaHitchError(Exception):
@@ -41,7 +47,9 @@ class TeslaHitchClient:
 
         self._cars: dict = {}  # vin -> TeslaCar
         self._energysites: dict = {}  # site_id -> EnergySite
-        self._last_update_times: dict[str, float] = {}
+        self._last_update_times: dict[str, float] = {}  # last SUCCESSFUL fetch
+        self._last_attempt_times: dict[str, float] = {}  # last ATTEMPT (throttle key)
+        self._consecutive_failures: dict[str, int] = {}  # per-key failure streak
         self._last_wake_up_times: dict[str, float] = {}
         self._car_online_status: dict[str, bool] = {}
         self._polling_enabled: dict[str, bool] = {}
@@ -144,6 +152,9 @@ class TeslaHitchClient:
         url = f"{self.teslahitch_url}/internal/vehicles/{vin}/command/wake_up"
         resp = await self._client.post(url)
         resp.raise_for_status()
+        # Record the wake so the poller resumes vehicle_data fetches for a car
+        # that was being skipped while asleep.
+        self._last_wake_up_times[vin] = time.time()
         try:
             return resp.json()
         except (json.JSONDecodeError, ValueError):
@@ -234,6 +245,42 @@ class TeslaHitchClient:
         self._energysites = sites
         return sites
 
+    # ------------------------------------------------------------------
+    # Poll throttling
+    # ------------------------------------------------------------------
+
+    def _poll_due(self, key: str, interval: int, now: float) -> bool:
+        """Whether a real Fleet API fetch for `key` is due.
+
+        Throttling keys off the last ATTEMPT, not the last success. If it
+        keyed off the last success, a target that keeps failing (asleep car,
+        Fleet API EXCEEDED_LIMIT, outage) would never advance its timestamp
+        and would be re-fetched on every coordinator tick (~15s), silently
+        blowing the Tesla Fleet API quota. On top of the base interval,
+        consecutive failures add exponential backoff up to
+        MAX_BACKOFF_INTERVAL so a persistently failing target is probed
+        sparingly.
+        """
+        last_attempt = self._last_attempt_times.get(key, 0)
+        if not last_attempt:
+            return True
+        fails = self._consecutive_failures.get(key, 0)
+        wait = interval
+        if fails > 1:
+            # First retry waits one interval; each further consecutive failure
+            # doubles the wait (2x, 4x, 8x, ...) up to the cap.
+            wait = min(interval * (2 ** min(fails - 1, 6)), MAX_BACKOFF_INTERVAL)
+        return now - last_attempt >= wait
+
+    def _note_success(self, key: str, now: float) -> None:
+        self._last_update_times[key] = now
+        self._consecutive_failures[key] = 0
+
+    def _note_failure(self, key: str) -> None:
+        self._consecutive_failures[key] = (
+            self._consecutive_failures.get(key, 0) + 1
+        )
+
     async def update(
         self,
         vins: set | None = None,
@@ -244,7 +291,8 @@ class TeslaHitchClient:
 
         Returns the raw data dict. Updates internal TeslaCar/EnergySite
         objects in-place. Real API calls are throttled to update_interval
-        seconds per vehicle/site; cached data is returned between calls.
+        seconds per vehicle/site (with failure backoff); cached data is
+        returned between calls.
         """
         result = {}
         now = time.time()
@@ -253,13 +301,31 @@ class TeslaHitchClient:
             if not vin or not self._polling_enabled.get(vin, True):
                 continue
 
-            last_update = self._last_update_times.get(vin, 0)
             interval = self._update_intervals.get(vin, self.update_interval)
-            if last_update and now - last_update < interval:
+
+            # Sleep-awareness: don't spend a vehicle_data call (which also
+            # wakes the car and drains the 12V battery) on a car we know is
+            # asleep/offline. It is re-detected as online by the cheap
+            # products poll below; a recent wake request resumes polling.
+            online = self._car_online_status.get(vin, True)
+            wake_recent = (
+                now - self._last_wake_up_times.get(vin, 0)
+            ) < interval
+            if not online and not wake_recent:
                 car = self._cars.get(vin)
                 if car:
                     result[vin] = car._vehicle_data
                 continue
+
+            if not self._poll_due(vin, interval, now):
+                car = self._cars.get(vin)
+                if car:
+                    result[vin] = car._vehicle_data
+                continue
+
+            # Claim the slot before awaiting so two coordinators firing on the
+            # same tick don't both slip through and double-call.
+            self._last_attempt_times[vin] = now
 
             try:
                 data = await self.get_vehicle_data(vin)
@@ -268,9 +334,10 @@ class TeslaHitchClient:
                     car._vehicle_data = data
                     state = data.get("state", "")
                     self._car_online_status[vin] = state == "online"
-                self._last_update_times[vin] = time.time()
+                self._note_success(vin, now)
                 result[vin] = data
             except httpx.HTTPStatusError as ex:
+                self._note_failure(vin)
                 _LOGGER.warning("Failed to update vehicle %s: %s", vin, ex)
                 if ex.response.status_code in (401, 403):
                     raise TeslaHitchError(
@@ -278,6 +345,7 @@ class TeslaHitchClient:
                     ) from ex
                 result[vin] = None
             except Exception as ex:
+                self._note_failure(vin)
                 _LOGGER.warning("Failed to update vehicle %s: %s", vin, ex)
                 result[vin] = None
 
@@ -285,29 +353,33 @@ class TeslaHitchClient:
             if not site_id:
                 continue
 
-            last_update = self._last_update_times.get(site_id, 0)
-            if last_update and now - last_update < self.update_interval:
+            if not self._poll_due(site_id, self.update_interval, now):
                 site = self._energysites.get(site_id)
                 if site:
                     result[site_id] = site._live_data
                 continue
+
+            self._last_attempt_times[site_id] = now
 
             try:
                 data = await self.get_energy_site_data(site_id)
                 site = self._energysites.get(site_id)
                 if site:
                     site._live_data = data
-                self._last_update_times[site_id] = time.time()
+                self._note_success(site_id, now)
                 result[site_id] = data
             except Exception as ex:
+                self._note_failure(site_id)
                 _LOGGER.warning("Failed to update energy site %s: %s", site_id, ex)
                 result[site_id] = None
 
         if update_vehicles:
-            # Re-fetch the products list to detect new/removed vehicles,
-            # throttled to update_interval like vehicle data fetches.
-            last_update = self._last_update_times.get("__vehicle_list__", 0)
-            if not last_update or now - last_update >= self.update_interval:
+            # Re-fetch the products list to detect new/removed vehicles and
+            # refresh online/asleep state, throttled (with backoff) like
+            # vehicle data fetches.
+            key = "__vehicle_list__"
+            if self._poll_due(key, self.update_interval, now):
+                self._last_attempt_times[key] = now
                 try:
                     products = await self.list_products()
                     for product in products:
@@ -319,8 +391,9 @@ class TeslaHitchClient:
                             car = self._cars.get(vin)
                             if car:
                                 car._car_data = product
-                    self._last_update_times["__vehicle_list__"] = time.time()
+                    self._note_success(key, now)
                 except Exception as ex:
+                    self._note_failure(key)
                     _LOGGER.debug("Failed to refresh vehicle list: %s", ex)
 
         return result or None
